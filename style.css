@@ -1,0 +1,27 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Hide scrollbars */
+    background-color: black;
+    height: 100%;
+}
+
+#galaxyCanvas {
+    display: block; /* Prevents potential extra space below canvas */
+    width: 100vw;   /* Set width via JS */
+    height: 100vh;  /* Set height via JS */
+}
+
+footer {
+    position: fixed; /* Position relative to the viewport */
+    bottom: 10px;    /* Place it 10px from the bottom */
+    left: 0;         /* Align to the left edge */
+    width: 100%;     /* Make it span the full width */
+    text-align: center; /* Center the text horizontally */
+    color: white;       /* Set the text color to white */
+    font-size: 12px;    /* Adjust font size as needed */
+    font-family: sans-serif; /* Use a common sans-serif font */
+    padding: 5px 0;     /* Add a little vertical padding */
+    z-index: 10;        /* Ensure it stays on top of the canvas */
+    pointer-events: none; /* Make text non-interactive so it doesn't block clicks on canvas */
+}
