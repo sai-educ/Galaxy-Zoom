@@ -1,318 +1,547 @@
-const canvas = document.getElementById('galaxyCanvas');
-const ctx = canvas.getContext('2d');
-
-let width, height;
-let galaxies = [];
-const NUM_GALAXIES = 400;
-const MAX_DEPTH = 50;
-const ZOOM_SPEED = 0.0048;
-const BASE_GALAXY_SIZE = 4.725; // Base size for galaxies
-const FADE_IN_DURATION = 1.5;
-
-// Galaxy types
-const GALAXY_TYPES = ['elliptical', 'spiral', 'barred_spiral', 'ringed_spiral', 'irregular', 'lenticular', 'edge_on_spiral'];
-
-let isZooming = false;
-let animationFrameId = null;
-
-// --- Galaxy Creation ---
-function createGalaxy(isInitial = false) {
-    let z = isInitial ? (Math.random() * (MAX_DEPTH - 0.1) + 0.1) : MAX_DEPTH;
-    if (z <= 0) z = 0.1;
-
-    const targetScreenX = Math.random() * width;
-    const targetScreenY = Math.random() * height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const x = (targetScreenX - centerX) * z;
-    const y = (targetScreenY - centerY) * z;
-
-    const type = GALAXY_TYPES[Math.floor(Math.random() * GALAXY_TYPES.length)];
-    
-    // More size variation (0.5x to 2.0x the base size)
-    const size = BASE_GALAXY_SIZE * (0.5 + Math.random() * 1.5);
-    
-    let coreColor = 'rgba(255, 255, 220, 0.8)';
-    let outerColor = 'rgba(180, 180, 255, 0.5)';
-    let aspect = 1.0;
-
-    const shadowBlurFactor = 1.8 + Math.random() * 0.7;
-    let ringData = null;
-    let irregularBlobs = null;
-    let dustColor = null; // For edge-on dust lane
-
-    // --- Type-Specific Setup ---
-    if (type === 'elliptical') {
-        // Random hue variations for elliptical galaxies
-        const hue = 200 + Math.floor(Math.random() * 55);
-        coreColor = `rgba(255, ${hue}, ${hue - 20}, 0.7)`;
-        outerColor = coreColor.replace(/[\d\.]+\)$/g, `0.4)`); // Match outer glow to core color
-        aspect = 0.6 + Math.random() * 0.4;
-    } else if (type === 'lenticular') {
-        aspect = 0.4 + Math.random() * 0.2;
-        coreColor = `rgba(220, 220, ${230 + Math.random()*25}, 0.7)`;
-        outerColor = `rgba(200, 200, 255, 0.4)`;
-    } else if (type === 'irregular') {
-        // Random color for irregular galaxies
-        const r = 180 + Math.floor(Math.random() * 75);
-        const g = 180 + Math.floor(Math.random() * 75);
-        const b = 200 + Math.floor(Math.random() * 55);
-        coreColor = `rgba(${r}, ${g}, ${b}, 0.7)`;
-        outerColor = `rgba(${r-30}, ${g-30}, ${b}, 0.4)`;
+// Galaxy HDR Engine - Professional 3D Galaxy Visualization
+class GalaxyEngine {
+    constructor() {
+        this.canvas = document.getElementById('galaxyCanvas');
+        this.gl = null;
+        this.program = null;
+        this.bloomProgram = null;
         
-        irregularBlobs = [];
-        const numBlobs = 4 + Math.floor(Math.random() * 4);
-        for (let i = 0; i < numBlobs; i++) {
-            irregularBlobs.push({
-                x: (Math.random() - 0.5) * size * 1.5, y: (Math.random() - 0.5) * size * 1.5,
-                s: size * (0.2 + Math.random() * 0.4), a: (0.4 + Math.random() * 0.6)
-            });
-        }
-    } else if (type === 'ringed_spiral') {
-        // More colorful ringed spirals
-        coreColor = `rgba(255, 255, ${180 + Math.floor(Math.random() * 40)}, 0.8)`;
-        outerColor = `rgba(${150 + Math.floor(Math.random() * 50)}, ${180 + Math.floor(Math.random() * 40)}, 255, 0.5)`;
-        
-        ringData = {
-             thicknessFactor: 0.15 + Math.random() * 0.1,
-             startAngle: Math.random() * Math.PI * 2,
-             angleSpan: Math.PI + Math.random() * Math.PI
+        // Galaxy properties
+        this.galaxies = [];
+        this.numGalaxies = 200;
+        this.galaxyData = {
+            positions: [],
+            colors: [],
+            sizes: [],
+            types: [],
+            rotations: [],
+            evolutionPhases: []
         };
-    } else if (type === 'edge_on_spiral') {
-        // Varied colors for edge-on spirals
-        aspect = 0.1 + Math.random() * 0.1; // Very flat
-        // Bright yellow/white core
-        coreColor = `rgba(255, 255, ${210 + Math.floor(Math.random() * 45)}, 0.9)`;
-        // Reddish/brownish dusty disk color
-        outerColor = `rgba(${180 + Math.floor(Math.random() * 50)}, ${100 + Math.floor(Math.random() * 50)}, ${80 + Math.floor(Math.random() * 50)}, 0.6)`;
-        // Dark brown/black dust lane
-        dustColor = `rgba(${30 + Math.floor(Math.random() * 30)}, ${20 + Math.floor(Math.random() * 20)}, ${20 + Math.floor(Math.random() * 20)}, 0.75)`;
-    } else if (type === 'spiral' || type === 'barred_spiral') {
-        // Varied colors for spiral galaxies
-        const yellowVar = 180 + Math.floor(Math.random() * 75);
-        coreColor = `rgba(255, 255, ${yellowVar}, 0.8)`;
-        const blueVar = 180 + Math.floor(Math.random() * 75);
-        outerColor = `rgba(${100 + Math.floor(Math.random() * 50)}, ${120 + Math.floor(Math.random() * 40)}, ${blueVar}, 0.5)`;
+        
+        // Camera properties
+        this.camera = {
+            position: [0, 0, 5],
+            rotation: [0, 0, 0],
+            fov: 60,
+            near: 0.1,
+            far: 1000
+        };
+        
+        // Interaction
+        this.mouse = { x: 0, y: 0, down: false, button: 0 };
+        this.lastMouse = { x: 0, y: 0 };
+        this.autoRotate = true;
+        this.rotationSpeed = 0.001;
+        
+        // Rendering
+        this.time = 0;
+        this.frameCount = 0;
+        this.lastTime = performance.now();
+        this.fps = 0;
+        
+        // Settings
+        this.bloomIntensity = 1.0;
+        
+        // Framebuffers for post-processing
+        this.framebuffer = null;
+        this.texture = null;
+        this.depthBuffer = null;
+        
+        this.init();
     }
-
-    // Add rotation properties
-    const baseRotationSpeed = 0.001 + Math.random() * 0.002;
-    const rotationDirection = Math.random() > 0.5 ? 1 : -1;
     
-    // Type-specific rotation speeds
-    let rotationSpeed;
-    if (type === 'spiral' || type === 'barred_spiral' || type === 'ringed_spiral') {
-        rotationSpeed = baseRotationSpeed * 1.5 * rotationDirection;
-    } else if (type === 'elliptical' || type === 'lenticular') {
-        rotationSpeed = baseRotationSpeed * 0.3 * rotationDirection;
-    } else if (type === 'edge_on_spiral') {
-        rotationSpeed = baseRotationSpeed * 0.2 * rotationDirection;
-    } else {
-        rotationSpeed = baseRotationSpeed * rotationDirection;
+    init() {
+        this.setupWebGL();
+        this.setupShaders();
+        this.setupFramebuffer();
+        this.generateGalaxies();
+        this.setupBuffers();
+        this.setupEventListeners();
+        this.hideLoading();
+        this.animate();
     }
-
-    return {
-        x: x, y: y, z: z, type: type, size: size, opacity: 0.5 + Math.random() * 0.5,
-        coreColor: coreColor, outerColor: outerColor, dustColor: dustColor,
-        angle: Math.random() * Math.PI * 2, 
-        rotationSpeed: rotationSpeed, // Add rotation speed
-        age: 0, aspect: aspect,
-        shadowBlurFactor: shadowBlurFactor, ringData: ringData, irregularBlobs: irregularBlobs
-    };
-}
-
-// --- Drawing ---
-function drawGalaxy(galaxy) {
-    if (galaxy.z <= 0.01) return;
-
-    const scale = 1 / galaxy.z;
-    const screenX = width / 2 + galaxy.x * scale;
-    const screenY = height / 2 + galaxy.y * scale;
-    const drawSize = galaxy.size;
-
-    const fadeInFactor = Math.min(1.0, galaxy.age / FADE_IN_DURATION);
-    if (fadeInFactor <= 0) return;
-
-    const margin = drawSize * 10; // Keep large margin for glows
-    if (screenX < -margin || screenX > width + margin || screenY < -margin || screenY > height + margin) {
-       return;
+    
+    setupWebGL() {
+        this.gl = this.canvas.getContext('webgl2', {
+            antialias: false,
+            alpha: true,
+            premultipliedAlpha: false,
+            preserveDrawingBuffer: false
+        });
+        
+        if (!this.gl) {
+            alert('WebGL 2 not supported. Please use a modern browser.');
+            return;
+        }
+        
+        const gl = this.gl;
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LEQUAL);
+        
+        this.resize();
     }
-
-    ctx.save();
-    ctx.translate(screenX, screenY);
-    ctx.rotate(galaxy.angle); // Apply rotation BEFORE drawing specific shapes
-
-    const baseAlpha = galaxy.opacity * fadeInFactor;
-    ctx.globalAlpha = baseAlpha;
-
-    // Apply overall glow using outerColor as base
-    ctx.shadowBlur = drawSize * galaxy.shadowBlurFactor;
-    ctx.shadowColor = galaxy.outerColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.5})`);
-
-    // --- Draw based on type ---
-    switch (galaxy.type) {
-        case 'elliptical':
-        case 'lenticular':
-            const gradElliptical = ctx.createRadialGradient(0, 0, drawSize * 0.1, 0, 0, drawSize);
-            gradElliptical.addColorStop(0, galaxy.coreColor.replace(/[\d\.]+\)$/g, `${baseAlpha})`));
-            gradElliptical.addColorStop(1, galaxy.outerColor.replace(/[\d\.]+\)$/g, `0)`));
-            ctx.fillStyle = gradElliptical;
-            ctx.beginPath();
-            ctx.ellipse(0, 0, drawSize, drawSize * galaxy.aspect, 0, 0, Math.PI * 2);
-            ctx.fill();
-            break;
-
-        case 'spiral':
-        case 'barred_spiral':
-            const gradSpiralCore = ctx.createRadialGradient(0, 0, drawSize * 0.1, 0, 0, drawSize * 0.6);
-            gradSpiralCore.addColorStop(0, galaxy.coreColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 1.2})`));
-            gradSpiralCore.addColorStop(1, galaxy.outerColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.8})`));
-            ctx.fillStyle = gradSpiralCore;
-            ctx.beginPath();
-            ctx.arc(0, 0, drawSize * 0.6, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = galaxy.outerColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.5})`);
-            ctx.beginPath();
-            ctx.ellipse(0, 0, drawSize * 1.8, drawSize * 1.2, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            if (galaxy.type === 'barred_spiral') {
-                 ctx.fillStyle = galaxy.coreColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.7})`);
-                 ctx.fillRect(-drawSize * 0.8, -drawSize * 0.15, drawSize * 1.6, drawSize * 0.3);
-            }
-            break;
-
-        case 'ringed_spiral':
-             const gradRingedCore = ctx.createRadialGradient(0, 0, drawSize * 0.1, 0, 0, drawSize * 0.5);
-            gradRingedCore.addColorStop(0, `rgba(255, 255, 200, ${baseAlpha * 1.2})`);
-            gradRingedCore.addColorStop(1, `rgba(200, 200, 150, ${baseAlpha * 0.8})`);
-            ctx.fillStyle = gradRingedCore;
-            ctx.beginPath();
-            ctx.arc(0, 0, drawSize * 0.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            const ringColor = `rgba(150, 200, 255, ${baseAlpha * 0.7})`;
-            ctx.strokeStyle = ringColor;
-            ctx.lineWidth = drawSize * galaxy.ringData.thicknessFactor;
-
-            for (let r = 0; r < 2; r++) {
-                const ringRadius = drawSize * (0.8 + r * 0.6);
-                ctx.beginPath();
-                ctx.ellipse(0, 0, ringRadius, ringRadius * 0.6, 0, galaxy.ringData.startAngle, galaxy.ringData.startAngle + galaxy.ringData.angleSpan);
-                ctx.stroke();
-            }
-            break;
-
-        case 'irregular':
-            if (galaxy.irregularBlobs) {
-                galaxy.irregularBlobs.forEach(blob => {
-                    const gradBlob = ctx.createRadialGradient(blob.x, blob.y, blob.s * 0.1, blob.x, blob.y, blob.s);
-                    gradBlob.addColorStop(0, galaxy.coreColor.replace(/[\d\.]+\)$/g, `${baseAlpha * blob.a})`));
-                    gradBlob.addColorStop(1, galaxy.outerColor.replace(/[\d\.]+\)$/g, `0)`));
-                    ctx.fillStyle = gradBlob;
-                    ctx.beginPath();
-                    ctx.arc(blob.x, blob.y, blob.s, 0, Math.PI * 2);
-                    ctx.fill();
-                });
-            }
-            break;
-
-        case 'edge_on_spiral':
-            // --- Draw Edge-On ---
-            const diskWidth = drawSize * 2.5; // Make disk wider relative to core size
-            const diskHeight = diskWidth * galaxy.aspect; // Use very small aspect ratio
-            const bulgeHeight = diskHeight * 2.5; // Bulge is thicker than disk but not as wide
-            const bulgeWidth = drawSize * 0.8;
-
-            // 1. Draw main disk (flattened ellipse, use outerColor)
-            ctx.fillStyle = galaxy.outerColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.8})`); // Disk color
-            ctx.beginPath();
-            ctx.ellipse(0, 0, diskWidth / 2, diskHeight / 2, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 2. Draw central bulge (brighter, thicker ellipse, use coreColor)
-            const gradBulge = ctx.createRadialGradient(0, 0, bulgeWidth * 0.1, 0, 0, bulgeWidth * 0.6);
-            gradBulge.addColorStop(0, galaxy.coreColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 1.1})`)); // Bright center
-            gradBulge.addColorStop(1, galaxy.outerColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.7})`)); // Blend towards disk color
-            ctx.fillStyle = gradBulge;
-            ctx.beginPath();
-            ctx.ellipse(0, 0, bulgeWidth / 2, bulgeHeight / 2, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 3. Draw dust lane (dark, semi-opaque rectangle or thin ellipse over the middle)
-            ctx.fillStyle = galaxy.dustColor.replace(/[\d\.]+\)$/g, `${baseAlpha * 0.85})`); // Use stored dust color
-            const dustLaneHeight = diskHeight * 0.4; // Adjust thickness
-            ctx.beginPath();
-            ctx.rect(-diskWidth / 2, -dustLaneHeight / 2, diskWidth, dustLaneHeight);
-            ctx.fill();
-            break;
-
-    } // End switch
-
-    ctx.restore(); // Restore context state (removes rotation, alpha, shadow etc)
-}
-
-// --- Draw Function ---
-function draw() {
-    ctx.clearRect(0, 0, width, height);
-    galaxies.forEach(drawGalaxy);
-}
-
-// --- Animation & Update ---
-function update() {
-    const deltaTime = 1 / 60;
-    for (let i = 0; i < galaxies.length; i++) {
-        // Update age for fade-in
-        galaxies[i].age = Math.min(FADE_IN_DURATION + 0.1, galaxies[i].age + deltaTime);
+    
+    setupShaders() {
+        // Main galaxy shader
+        const vertexShaderSource = document.getElementById('vertexShader').textContent;
+        const fragmentShaderSource = document.getElementById('fragmentShader').textContent;
+        this.program = this.createShaderProgram(vertexShaderSource, fragmentShaderSource);
         
-        // Apply rotation - galaxies spin continuously
-        galaxies[i].angle += galaxies[i].rotationSpeed;
+        // Bloom post-processing shader
+        const bloomVertexSource = document.getElementById('bloomVertexShader').textContent;
+        const bloomFragmentSource = document.getElementById('bloomFragmentShader').textContent;
+        this.bloomProgram = this.createShaderProgram(bloomVertexSource, bloomFragmentSource);
         
-        // Handle zooming
-        if (isZooming) {
-            galaxies[i].z -= ZOOM_SPEED;
-            if (galaxies[i].z <= 0.01) {
-                galaxies[i] = createGalaxy(false);
-                galaxies[i].age = 0;
-            }
+        // Get uniform locations
+        const gl = this.gl;
+        gl.useProgram(this.program);
+        this.uniforms = {
+            modelViewMatrix: gl.getUniformLocation(this.program, 'modelViewMatrix'),
+            projectionMatrix: gl.getUniformLocation(this.program, 'projectionMatrix'),
+            time: gl.getUniformLocation(this.program, 'time')
+        };
+        
+        // Bloom uniforms
+        gl.useProgram(this.bloomProgram);
+        this.bloomUniforms = {
+            tDiffuse: gl.getUniformLocation(this.bloomProgram, 'tDiffuse'),
+            resolution: gl.getUniformLocation(this.bloomProgram, 'resolution'),
+            bloomIntensity: gl.getUniformLocation(this.bloomProgram, 'bloomIntensity')
+        };
+    }
+    
+    createShaderProgram(vertexSource, fragmentSource) {
+        const gl = this.gl;
+        
+        const vertexShader = this.createShader(gl.VERTEX_SHADER, vertexSource);
+        const fragmentShader = this.createShader(gl.FRAGMENT_SHADER, fragmentSource);
+        
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Shader program failed to link:', gl.getProgramInfoLog(program));
+            return null;
+        }
+        
+        return program;
+    }
+    
+    createShader(type, source) {
+        const gl = this.gl;
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error('Shader compilation failed:', gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+        }
+        
+        return shader;
+    }
+    
+    setupFramebuffer() {
+        const gl = this.gl;
+        
+        // Create framebuffer
+        this.framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
+        
+        // Create texture
+        this.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        
+        // Create depth buffer
+        this.depthBuffer = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.depthBuffer);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, this.canvas.width, this.canvas.height);
+        
+        // Attach to framebuffer
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture, 0);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.depthBuffer);
+        
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    
+    generateGalaxies() {
+        this.galaxies = [];
+        this.galaxyData = {
+            positions: [],
+            colors: [],
+            sizes: [],
+            types: [],
+            rotations: [],
+            evolutionPhases: []
+        };
+        
+        for (let i = 0; i < this.numGalaxies; i++) {
+            const galaxy = this.createGalaxy();
+            this.galaxies.push(galaxy);
+            
+            // Flatten data for buffers
+            this.galaxyData.positions.push(...galaxy.position);
+            this.galaxyData.colors.push(...galaxy.color);
+            this.galaxyData.sizes.push(galaxy.size);
+            this.galaxyData.types.push(galaxy.type);
+            this.galaxyData.rotations.push(galaxy.rotation);
+            this.galaxyData.evolutionPhases.push(galaxy.evolutionPhase);
         }
     }
-}
-
-function animate() {
-    update();
-    draw();
-    animationFrameId = requestAnimationFrame(animate);
-}
-
-// --- Event Handlers ---
-function handleMouseDown(event) { if (event.button === 0) { isZooming = true; } }
-function handleMouseUp(event) { if (event.button === 0) { isZooming = false; } }
-
-let resizeTimeout;
-function handleResize() {
-    clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(() => {
-        width = window.innerWidth; height = window.innerHeight;
-        canvas.width = width; canvas.height = height;
-        galaxies = [];
-        for (let i = 0; i < NUM_GALAXIES; i++) {
-            galaxies.push(createGalaxy(true));
-            galaxies[i].age = FADE_IN_DURATION + 1;
+    
+    createGalaxy() {
+        // Random position in 3D space
+        const radius = 50 + Math.random() * 200;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(Math.random() * 2 - 1);
+        
+        const x = radius * Math.sin(phi) * Math.cos(theta);
+        const y = radius * Math.sin(phi) * Math.sin(theta);
+        const z = radius * Math.cos(phi) - 100;
+        
+        // Galaxy properties
+        const types = ['spiral', 'elliptical', 'irregular'];
+        const typeIndex = Math.floor(Math.random() * types.length);
+        const type = typeIndex / types.length; // Normalize to 0-1
+        
+        // Color based on type
+        let color;
+        if (typeIndex === 0) { // Spiral - bluish with yellow core
+            color = [0.4 + Math.random() * 0.3, 0.5 + Math.random() * 0.3, 0.8 + Math.random() * 0.2];
+        } else if (typeIndex === 1) { // Elliptical - reddish
+            color = [0.9 + Math.random() * 0.1, 0.6 + Math.random() * 0.2, 0.4 + Math.random() * 0.2];
+        } else { // Irregular - mixed colors
+            color = [0.5 + Math.random() * 0.5, 0.5 + Math.random() * 0.5, 0.5 + Math.random() * 0.5];
         }
-        draw();
-    }, 100);
+        
+        return {
+            position: [x, y, z],
+            color: color,
+            size: 20 + Math.random() * 80,
+            type: type,
+            rotation: Math.random() * Math.PI * 2,
+            rotationSpeed: (Math.random() - 0.5) * 0.02,
+            evolutionPhase: Math.random() * Math.PI * 2,
+            evolutionSpeed: 0.01 + Math.random() * 0.02
+        };
+    }
+    
+    setupBuffers() {
+        const gl = this.gl;
+        gl.useProgram(this.program);
+        
+        // Position buffer
+        this.positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.galaxyData.positions), gl.STATIC_DRAW);
+        
+        const positionLoc = gl.getAttribLocation(this.program, 'position');
+        gl.enableVertexAttribArray(positionLoc);
+        gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+        
+        // Color buffer
+        this.colorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.galaxyData.colors), gl.STATIC_DRAW);
+        
+        const colorLoc = gl.getAttribLocation(this.program, 'color');
+        gl.enableVertexAttribArray(colorLoc);
+        gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+        
+        // Size buffer
+        this.sizeBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.galaxyData.sizes), gl.STATIC_DRAW);
+        
+        const sizeLoc = gl.getAttribLocation(this.program, 'size');
+        gl.enableVertexAttribArray(sizeLoc);
+        gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, 0, 0);
+        
+        // Type buffer
+        this.typeBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.typeBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.galaxyData.types), gl.STATIC_DRAW);
+        
+        const typeLoc = gl.getAttribLocation(this.program, 'type');
+        gl.enableVertexAttribArray(typeLoc);
+        gl.vertexAttribPointer(typeLoc, 1, gl.FLOAT, false, 0, 0);
+        
+        // Rotation buffer (will be updated)
+        this.rotationBuffer = gl.createBuffer();
+        this.rotationData = new Float32Array(this.galaxyData.rotations);
+        
+        // Evolution buffer (will be updated)
+        this.evolutionBuffer = gl.createBuffer();
+        this.evolutionData = new Float32Array(this.galaxyData.evolutionPhases);
+        
+        // Create quad for bloom post-processing
+        this.quadBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+        const quadVertices = new Float32Array([
+            -1, -1,  1, -1,  -1, 1,
+            -1, 1,   1, -1,   1, 1
+        ]);
+        gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
+    }
+    
+    setupEventListeners() {
+        // Mouse events
+        this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+        this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
+        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        
+        // Touch events for mobile
+        this.canvas.addEventListener('touchstart', (e) => this.onTouchStart(e));
+        this.canvas.addEventListener('touchmove', (e) => this.onTouchMove(e));
+        this.canvas.addEventListener('touchend', (e) => this.onTouchEnd(e));
+        
+        // Window resize
+        window.addEventListener('resize', () => this.resize());
+        
+        // UI controls
+        document.getElementById('autoRotate').addEventListener('change', (e) => {
+            this.autoRotate = e.target.checked;
+        });
+        
+        document.getElementById('bloomIntensity').addEventListener('input', (e) => {
+            this.bloomIntensity = parseFloat(e.target.value);
+        });
+        
+        document.getElementById('galaxyDensity').addEventListener('input', (e) => {
+            this.numGalaxies = parseInt(e.target.value);
+            this.generateGalaxies();
+            this.setupBuffers();
+        });
+        
+        document.getElementById('resetView').addEventListener('click', () => {
+            this.camera.position = [0, 0, 5];
+            this.camera.rotation = [0, 0, 0];
+        });
+    }
+    
+    onMouseDown(e) {
+        this.mouse.down = true;
+        this.mouse.button = e.button;
+        this.lastMouse.x = e.clientX;
+        this.lastMouse.y = e.clientY;
+    }
+    
+    onMouseMove(e) {
+        if (!this.mouse.down) return;
+        
+        const deltaX = e.clientX - this.lastMouse.x;
+        const deltaY = e.clientY - this.lastMouse.y;
+        
+        if (this.mouse.button === 0) { // Left button - rotate
+            this.camera.rotation[1] += deltaX * 0.01;
+            this.camera.rotation[0] += deltaY * 0.01;
+            this.camera.rotation[0] = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.camera.rotation[0]));
+        } else if (this.mouse.button === 2) { // Right button - pan
+            const panSpeed = 0.01 * this.camera.position[2];
+            this.camera.position[0] -= deltaX * panSpeed;
+            this.camera.position[1] += deltaY * panSpeed;
+        }
+        
+        this.lastMouse.x = e.clientX;
+        this.lastMouse.y = e.clientY;
+    }
+    
+    onMouseUp(e) {
+        this.mouse.down = false;
+    }
+    
+    onWheel(e) {
+        e.preventDefault();
+        const zoomSpeed = 0.001 * Math.abs(this.camera.position[2]);
+        this.camera.position[2] += e.deltaY * zoomSpeed;
+        this.camera.position[2] = Math.max(1, Math.min(500, this.camera.position[2]));
+    }
+    
+    onTouchStart(e) {
+        if (e.touches.length === 1) {
+            this.mouse.down = true;
+            this.lastMouse.x = e.touches[0].clientX;
+            this.lastMouse.y = e.touches[0].clientY;
+        }
+    }
+    
+    onTouchMove(e) {
+        if (e.touches.length === 1 && this.mouse.down) {
+            const deltaX = e.touches[0].clientX - this.lastMouse.x;
+            const deltaY = e.touches[0].clientY - this.lastMouse.y;
+            
+            this.camera.rotation[1] += deltaX * 0.01;
+            this.camera.rotation[0] += deltaY * 0.01;
+            
+            this.lastMouse.x = e.touches[0].clientX;
+            this.lastMouse.y = e.touches[0].clientY;
+        }
+    }
+    
+    onTouchEnd(e) {
+        this.mouse.down = false;
+    }
+    
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        
+        const gl = this.gl;
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Recreate framebuffer for new size
+        this.setupFramebuffer();
+    }
+    
+    updateGalaxies() {
+        // Update rotation and evolution
+        for (let i = 0; i < this.galaxies.length; i++) {
+            this.galaxies[i].rotation += this.galaxies[i].rotationSpeed;
+            this.galaxies[i].evolutionPhase += this.galaxies[i].evolutionSpeed;
+            
+            this.rotationData[i] = this.galaxies[i].rotation;
+            this.evolutionData[i] = this.galaxies[i].evolutionPhase;
+        }
+        
+        // Update buffers
+        const gl = this.gl;
+        
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.rotationBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, this.rotationData, gl.DYNAMIC_DRAW);
+        const rotationLoc = gl.getAttribLocation(this.program, 'rotation');
+        gl.enableVertexAttribArray(rotationLoc);
+        gl.vertexAttribPointer(rotationLoc, 1, gl.FLOAT, false, 0, 0);
+        
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.evolutionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, this.evolutionData, gl.DYNAMIC_DRAW);
+        const evolutionLoc = gl.getAttribLocation(this.program, 'evolutionPhase');
+        gl.enableVertexAttribArray(evolutionLoc);
+        gl.vertexAttribPointer(evolutionLoc, 1, gl.FLOAT, false, 0, 0);
+    }
+    
+    render() {
+        const gl = this.gl;
+        
+        // First pass: Render to framebuffer
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        
+        // Use main program
+        gl.useProgram(this.program);
+        
+        // Setup matrices
+        const projectionMatrix = this.createProjectionMatrix();
+        const modelViewMatrix = this.createModelViewMatrix();
+        
+        gl.uniformMatrix4fv(this.uniforms.projectionMatrix, false, projectionMatrix);
+        gl.uniformMatrix4fv(this.uniforms.modelViewMatrix, false, modelViewMatrix);
+        gl.uniform1f(this.uniforms.time, this.time);
+        
+        // Draw galaxies as points
+        gl.drawArrays(gl.POINTS, 0, this.numGalaxies);
+        
+        // Second pass: Apply bloom
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        
+        gl.useProgram(this.bloomProgram);
+        
+        // Bind the rendered texture
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.uniform1i(this.bloomUniforms.tDiffuse, 0);
+        gl.uniform2f(this.bloomUniforms.resolution, this.canvas.width, this.canvas.height);
+        gl.uniform1f(this.bloomUniforms.bloomIntensity, this.bloomIntensity);
+        
+        // Draw fullscreen quad
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+        const positionLoc = gl.getAttribLocation(this.bloomProgram, 'position');
+        gl.enableVertexAttribArray(positionLoc);
+        gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+        
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    
+    createProjectionMatrix() {
+        const aspect = this.canvas.width / this.canvas.height;
+        const fovRad = this.camera.fov * Math.PI / 180;
+        const f = 1.0 / Math.tan(fovRad / 2);
+        const rangeInv = 1 / (this.camera.near - this.camera.far);
+        
+        return new Float32Array([
+            f / aspect, 0, 0, 0,
+            0, f, 0, 0,
+            0, 0, (this.camera.near + this.camera.far) * rangeInv, -1,
+            0, 0, this.camera.near * this.camera.far * rangeInv * 2, 0
+        ]);
+    }
+    
+    createModelViewMatrix() {
+        // Create rotation matrices
+        const cosX = Math.cos(this.camera.rotation[0]);
+        const sinX = Math.sin(this.camera.rotation[0]);
+        const cosY = Math.cos(this.camera.rotation[1]);
+        const sinY = Math.sin(this.camera.rotation[1]);
+        
+        // Combined rotation and translation matrix
+        return new Float32Array([
+            cosY, sinX * sinY, -cosX * sinY, 0,
+            0, cosX, sinX, 0,
+            sinY, -sinX * cosY, cosX * cosY, 0,
+            -this.camera.position[0], -this.camera.position[1], -this.camera.position[2], 1
+        ]);
+    }
+    
+    updateStats() {
+        const currentTime = performance.now();
+        this.frameCount++;
+        
+        if (currentTime - this.lastTime >= 1000) {
+            this.fps = this.frameCount;
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+            
+            // Update UI
+            document.querySelector('#fps span').textContent = this.fps;
+            document.querySelector('#galaxyCount span').textContent = this.numGalaxies;
+        }
+    }
+    
+    hideLoading() {
+        setTimeout(() => {
+            document.getElementById('loading').classList.add('hidden');
+        }, 1500);
+    }
+    
+    animate() {
+        this.time += 0.016; // ~60fps
+        
+        // Auto rotation
+        if (this.autoRotate) {
+            this.camera.rotation[1] += this.rotationSpeed;
+        }
+        
+        this.updateGalaxies();
+        this.render();
+        this.updateStats();
+        
+        requestAnimationFrame(() => this.animate());
+    }
 }
 
-// --- Initialization ---
-function init() {
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
-    window.addEventListener('resize', handleResize);
-    handleResize();
-    if (!animationFrameId) { animate(); }
-}
-
-// --- Start ---
-init();
+// Initialize the engine when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    new GalaxyEngine();
+});

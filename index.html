@@ -1,17 +1,253 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Infinite Galaxy Zoom</title>
+    <title>Infinite Galaxy Explorer - HDR Edition</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <canvas id="galaxyCanvas"></canvas>
+    
+    <div id="ui-overlay">
+        <div id="title">
+            <h1>Infinite Galaxy Explorer</h1>
+            <p>HDR Edition</p>
+        </div>
+        
+        <div id="controls">
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="autoRotate" checked>
+                    Auto Rotate
+                </label>
+            </div>
+            <div class="control-group">
+                <label>
+                    Bloom Intensity
+                    <input type="range" id="bloomIntensity" min="0" max="2" step="0.1" value="1">
+                </label>
+            </div>
+            <div class="control-group">
+                <label>
+                    Galaxy Density
+                    <input type="range" id="galaxyDensity" min="50" max="500" step="50" value="200">
+                </label>
+            </div>
+            <div class="control-group">
+                <button id="resetView">Reset View</button>
+            </div>
+        </div>
+        
+        <div id="instructions">
+            <p><strong>Navigation:</strong></p>
+            <p>🖱️ Click & Drag to rotate view</p>
+            <p>📜 Scroll to zoom in/out</p>
+            <p>🎯 Right-click & drag to pan</p>
+        </div>
+        
+        <div id="stats">
+            <div id="fps">FPS: <span>0</span></div>
+            <div id="galaxyCount">Galaxies: <span>0</span></div>
+        </div>
+    </div>
+    
+    <div id="loading">
+        <div class="loading-spinner"></div>
+        <p>Generating Universe...</p>
+    </div>
 
-    <footer>
-        Instructions: click and hold for infinite galaxy zoom. Created for curious minds by Sai Gattupalli from UMass Amherst.
-    </footer>
+    <!-- Vertex Shader -->
+    <script id="vertexShader" type="x-shader/x-vertex">
+        attribute vec3 position;
+        attribute vec3 color;
+        attribute float size;
+        attribute float type;
+        attribute float rotation;
+        attribute float evolutionPhase;
+        
+        uniform mat4 modelViewMatrix;
+        uniform mat4 projectionMatrix;
+        uniform float time;
+        
+        varying vec3 vColor;
+        varying float vType;
+        varying float vRotation;
+        varying float vEvolution;
+        varying float vDepth;
+        
+        void main() {
+            vColor = color;
+            vType = type;
+            vRotation = rotation + time * 0.1;
+            vEvolution = evolutionPhase;
+            
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            vDepth = -mvPosition.z;
+            
+            gl_Position = projectionMatrix * mvPosition;
+            
+            // Dynamic size based on distance and evolution
+            float sizeMultiplier = 1.0 + sin(evolutionPhase + time) * 0.2;
+            gl_PointSize = size * sizeMultiplier * (300.0 / length(mvPosition.xyz));
+        }
+    </script>
+
+    <!-- Fragment Shader -->
+    <script id="fragmentShader" type="x-shader/x-fragment">
+        precision highp float;
+        
+        uniform sampler2D galaxyTexture;
+        uniform float time;
+        
+        varying vec3 vColor;
+        varying float vType;
+        varying float vRotation;
+        varying float vEvolution;
+        varying float vDepth;
+        
+        vec3 galaxySpiral(vec2 uv, vec3 color, float rotation) {
+            vec2 center = vec2(0.5);
+            vec2 pos = uv - center;
+            
+            // Rotate
+            float angle = rotation;
+            mat2 rot = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
+            pos = rot * pos;
+            
+            float r = length(pos);
+            float theta = atan(pos.y, pos.x);
+            
+            // Spiral arms
+            float spiral = sin(theta * 3.0 - r * 10.0 + time * 0.5) * 0.5 + 0.5;
+            spiral *= exp(-r * 3.0);
+            
+            // Core
+            float core = exp(-r * r * 20.0);
+            
+            // Combine
+            vec3 finalColor = mix(color * 0.5, color * 2.0, core);
+            finalColor += color * spiral * 0.5;
+            
+            // HDR boost
+            finalColor *= 1.0 + core * 2.0;
+            
+            float alpha = core + spiral * 0.5;
+            return finalColor * alpha;
+        }
+        
+        vec3 galaxyElliptical(vec2 uv, vec3 color) {
+            vec2 center = vec2(0.5);
+            float dist = length(uv - center);
+            
+            float intensity = exp(-dist * dist * 8.0);
+            vec3 finalColor = color * intensity * 3.0;
+            
+            // Add some color variation
+            finalColor.r *= 1.0 + sin(vEvolution + time) * 0.2;
+            finalColor.b *= 1.0 + cos(vEvolution + time * 1.1) * 0.2;
+            
+            return finalColor;
+        }
+        
+        vec3 galaxyIrregular(vec2 uv, vec3 color) {
+            vec2 center = vec2(0.5);
+            vec2 pos = uv - center;
+            
+            // Multiple blob centers
+            float intensity = 0.0;
+            for(int i = 0; i < 3; i++) {
+                float angle = float(i) * 2.094 + vEvolution;
+                vec2 blobPos = vec2(cos(angle), sin(angle)) * 0.2;
+                float blobDist = length(pos - blobPos);
+                intensity += exp(-blobDist * blobDist * 15.0);
+            }
+            
+            return color * intensity * 2.5;
+        }
+        
+        void main() {
+            vec2 uv = gl_PointCoord;
+            vec3 finalColor = vec3(0.0);
+            
+            // Galaxy type rendering
+            if(vType < 0.33) {
+                finalColor = galaxySpiral(uv, vColor, vRotation);
+            } else if(vType < 0.66) {
+                finalColor = galaxyElliptical(uv, vColor);
+            } else {
+                finalColor = galaxyIrregular(uv, vColor);
+            }
+            
+            // Distance fog
+            float fog = exp(-vDepth * 0.0005);
+            finalColor *= fog;
+            
+            // HDR tone mapping
+            finalColor = finalColor / (finalColor + vec3(1.0));
+            finalColor = pow(finalColor, vec3(1.0/2.2));
+            
+            gl_FragColor = vec4(finalColor, length(finalColor) * 0.5);
+        }
+    </script>
+
+    <!-- Bloom Shader -->
+    <script id="bloomVertexShader" type="x-shader/x-vertex">
+        attribute vec2 position;
+        varying vec2 vUv;
+        
+        void main() {
+            vUv = position * 0.5 + 0.5;
+            gl_Position = vec4(position, 0.0, 1.0);
+        }
+    </script>
+
+    <script id="bloomFragmentShader" type="x-shader/x-fragment">
+        precision highp float;
+        
+        uniform sampler2D tDiffuse;
+        uniform vec2 resolution;
+        uniform float bloomIntensity;
+        
+        varying vec2 vUv;
+        
+        vec3 sampleBox(sampler2D tex, vec2 uv, float delta) {
+            vec2 texelSize = 1.0 / resolution;
+            vec3 result = vec3(0.0);
+            
+            for(float x = -2.0; x <= 2.0; x += 1.0) {
+                for(float y = -2.0; y <= 2.0; y += 1.0) {
+                    vec2 offset = vec2(x, y) * texelSize * delta;
+                    result += texture2D(tex, uv + offset).rgb;
+                }
+            }
+            
+            return result / 25.0;
+        }
+        
+        void main() {
+            vec3 color = texture2D(tDiffuse, vUv).rgb;
+            
+            // Multi-scale bloom
+            vec3 bloom = vec3(0.0);
+            bloom += sampleBox(tDiffuse, vUv, 1.0) * 0.5;
+            bloom += sampleBox(tDiffuse, vUv, 2.0) * 0.5;
+            bloom += sampleBox(tDiffuse, vUv, 4.0) * 0.25;
+            bloom += sampleBox(tDiffuse, vUv, 8.0) * 0.125;
+            
+            // Threshold bright areas
+            bloom = max(bloom - vec3(0.5), vec3(0.0)) * 2.0;
+            
+            // Combine
+            vec3 finalColor = color + bloom * bloomIntensity;
+            
+            // Final tone mapping
+            finalColor = finalColor / (finalColor + vec3(1.0));
+            finalColor = pow(finalColor, vec3(1.0/2.2));
+            
+            gl_FragColor = vec4(finalColor, 1.0);
+        }
+    </script>
 
     <script src="script.js"></script>
 </body>
